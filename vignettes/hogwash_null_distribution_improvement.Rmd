@@ -1,0 +1,252 @@
+---
+title: "Improve generation of the null distribution"
+output: html_document
+---
+
+```{r}
+library(ape)
+```
+
+
+```{r, include = FALSE}
+plot_tree_w_color_edges <- function(tr,
+                                  edges_to_highlight,
+                                  geno_confidence,
+                                  edge_color_na = "grey",
+                                  edge_color_bright = "red",
+                                  title = "title", 
+                                  legend_bright = "highligted edge", 
+                                  legend_baseline = "nonhighlighted edge"){
+  # Function -------------------------------------------------------------------
+  tree_legend_cex <- 0.5
+  edge_color_baseline <- "black"
+  edge_color <- rep(edge_color_baseline, ape::Nedge(tr))
+  edge_color[edges_to_highlight == 1] <- edge_color_bright
+  edge_color[geno_confidence == 0] <- edge_color_na # grey out long
+
+  edge_width <- 1
+  if (ape::Ntip(tr) >= 200) { edge_width <- 0.25 }
+
+  graphics::par(mar = c(4, 4, 4, 4))
+  graphics::plot(tr,
+                 font = 1,
+                 edge.color = edge_color,
+                 main = title,
+                 label.offset = 0.25,
+                 adj = 0,
+                 cex = tree_legend_cex,
+                 edge.width = edge_width)
+  
+  graphics::legend("topleft",
+                   bty = "o",
+                   legend = c(legend_baseline,
+                              legend_bright,
+                              "Low confidence"),
+                   col = c(edge_color_baseline,
+                           edge_color_bright,
+                           edge_color_na),
+                   lty = 1,
+                   ncol = 1,
+                   lwd = 1,
+                   cex = tree_legend_cex)
+}
+```
+
+Generate example data: tree, genotype, genotype transitions, and phenotype 
+transition. 
+```{r}
+# set up a tree
+num_samples <- 6
+set.seed(1)
+temp_tree <- ape::rtree(num_samples)
+temp_tree$node.labels <- rep(100, ape::Nnode(temp_tree))
+num_edge <- ape::Nedge(temp_tree)
+
+# set up genotype transitions per edge: a list with a vector for each genotype
+num_genotypes <- 15
+temp_geno_trans <- temp_hi_conf_edges <- rep(list(0), num_genotypes)
+set.seed(1)
+for (k in 1:num_genotypes) {
+  temp_geno_trans[[k]] <- c(0, 0, 0, 1, 0, 0, 0, 1, 0, 0)
+  temp_hi_conf_edges[[k]] <- rep(1, num_edge)
+  temp_hi_conf_edges[[k]][sample(1:num_edge, 3, replace = TRUE)] <- 0 
+}
+temp_geno_trans[[14]] <- c(0, 1, 1, 1, 0, 0, 1, 1, 0, 0)
+temp_geno_trans[[15]] <- c(0, 0, 1, 1, 0, 0, 0, 1, 0, 0)
+
+# set up a vector with phenotype transition per edge
+temp_pheno_trans <- c(1, 1, 1, 1, 0, 0, 0, 0, 0, 0)
+
+# set up a "fake" genotype that doesn't match recon or transition because it 
+# doesn't need to match for this example
+temp_geno <- matrix(1, ncol = num_genotypes, nrow = ape::Ntip(temp_tree))
+
+# set up number of permutations
+temp_perm <- 300
+
+temp_num_edges_with_geno_trans <- sapply(temp_geno_trans, function(x) sum(x))
+temp_num_hi_conf_edges <- sapply(temp_hi_conf_edges, function(x) sum(x))
+```
+
+# CURRENT VERSION 
+Run through the code for one genotype (the index is the genotype number)
+```{r}
+index <- 2
+permuted_geno_trans_mat <-
+  matrix(nrow = temp_perm, ncol = temp_num_edges_with_geno_trans[index])
+redistributed_hits <- matrix(0, nrow = temp_perm, ncol = ape::Nedge(temp_tree))
+
+# set j
+for (j in 1:temp_perm) {
+permuted_geno_trans_mat[j, ] <-
+  sample(1:temp_num_hi_conf_edges[index],
+         size = temp_num_edges_with_geno_trans[index],
+         replace = FALSE,
+         prob = temp_tree$edge.length[as.logical(temp_hi_conf_edges[[index]])] /
+           sum(temp_tree$edge.length[temp_hi_conf_edges[[index]]]))
+}
+
+for (m in 1:nrow(permuted_geno_trans_mat)) {
+  redistributed_hits[m, ][permuted_geno_trans_mat[m, ]] <- 1
+}
+
+CURRENT_VERSION_redistributed_hits <- redistributed_hits
+CURRENT_VERSION_permuted_geno_trans_mat <- permuted_geno_trans_mat
+
+```
+
+# PROPOSED NEW VERSION
+
+```{r}
+# convert example code above (originally adapted from unit test) to 
+num_perm <- temp_perm
+high_conf_edges <- temp_hi_conf_edges
+number_edges_with_geno_trans <- temp_num_edges_with_geno_trans
+tr <- temp_tree
+# --- 
+
+permuted_geno_trans_mat <-
+  matrix(nrow = temp_perm, ncol = temp_num_edges_with_geno_trans[index])
+redistributed_hits <- matrix(0, nrow = temp_perm, ncol = ape::Nedge(temp_tree))
+
+for (j in 1:num_perm) {
+    permuted_geno_trans_mat[j, ] <-
+      sample(which(as.logical(high_conf_edges[[index]])),
+             size = number_edges_with_geno_trans[index],
+             replace = FALSE,
+             prob = tr$edge.length[as.logical(high_conf_edges[[index]])] /
+               sum(tr$edge.length[as.logical(high_conf_edges[[index]])]))
+}
+
+for (m in 1:nrow(permuted_geno_trans_mat)) {
+  redistributed_hits[m, ][permuted_geno_trans_mat[m, ]] <- 1
+}
+
+PROPOSED_NEW_VERSION_redistributed_hits <- redistributed_hits
+PROPOSED_NEW_VERSION_permuted_geno_trans_mat <- permuted_geno_trans_mat
+```
+
+
+```{r}
+prob <- tr$edge.length[as.logical(high_conf_edges[[index]])] /
+               sum(tr$edge.length[as.logical(high_conf_edges[[index]])])
+
+all_prob <- rep(0, num_edge)
+all_prob[which(as.logical(high_conf_edges[[index]]))] <- prob
+
+expected_count <- 
+  all_prob * sum(PROPOSED_NEW_VERSION_permuted_geno_trans_mat != 0)
+```
+
+# Plot probability of selecting each edge
+This probability is the same for both the current and proposed new version of
+the code. 
+
+The probability for each edge is the relative edge length; all low confidence
+edges are removed from consideration. 
+
+```{r}
+plot(x = 1:10, 
+       y = all_prob, 
+       cex = 2,
+          xaxt = "n",
+     xlab = "Edge", 
+     ylab = "Probability",
+     main = "Probability of selecting edge \nBased on length & considering reconstruction confidence",
+     col = "orange")
+axis(1, at = 1:10)
+
+```
+
+# Now let's compare which edges get chosen in the two versions
+
+## CURRENT VERSION 
+
+```{r}
+plot(table(CURRENT_VERSION_permuted_geno_trans_mat), 
+     xlim = c(0, 10),
+          ylim = c(0, 140),
+     xlab = "Edge number", 
+     ylab = "Count",
+     col = "red", 
+          xaxt = "n",
+     main = "Edges chosen by CURRENT VERSION;\n black x=lo conf; grey caret=hi conf")
+points(which(!as.logical(high_conf_edges[[index]])),  c(0, 0, 0), 
+     xlim = c(0, num_edge),
+     col = "black", pch = "x", cex = 3)
+points(which(as.logical(high_conf_edges[[index]])),  c(0, 0, 0, 0, 0, 0, 0), 
+     xlim = c(0, num_edge),
+     col = "grey", pch = "^", cex = 3)
+points(x = 1:10, 
+       y = expected_count, 
+       col = "orange", 
+       cex = 2)
+axis(1, at = 1:10)
+
+```
+
+In this particular example: 7/10 edges are high confidence and the sampling 
+function picks `r sum(number_edges_with_geno_trans[index])` edges during each
+permutation. As currently written, the null distribution is made up from only 
+edges 1:7. This is skewing the null distribution based on the default edge order
+(I think the ape default) AND is going to make P-values artificially smaller if
+- as in this case - there are an enriched number of low confidence edges earlier
+in the tree order. 
+
+## PROPOSED NEW VERSION 
+```{r}
+plot(table(PROPOSED_NEW_VERSION_permuted_geno_trans_mat), 
+     xlim = c(0, 10),
+     ylim = c(0, 140),
+     xlab = "Edge number", 
+     ylab = "Count",
+     col = "blue", 
+          xaxt = "n",
+
+     main = "Edges chosen by PROPOSED NEW VERSION;\n black x=lo conf; grey caret=hi conf")
+points(which(!as.logical(high_conf_edges[[index]])),  c(0, 0, 0), 
+     xlim = c(0, num_edge),
+     col = "black", pch = "x", cex = 3)
+points(which(as.logical(high_conf_edges[[index]])),  c(0, 0, 0, 0, 0, 0, 0), 
+     xlim = c(0, num_edge),
+     col = "grey", pch = "^", cex = 3)
+axis(1, at = 1:10)
+
+
+points(x = 1:10, 
+       y = expected_count, 
+       col = "orange", 
+       cex = 2)
+```
+
+In this particular example: 7/10 edges are high confidence and the sampling 
+function picks `r sum(number_edges_with_geno_trans[index])` edges during each
+permutation. I propose that the new null distribution be made up from only 
+the high confidence edges (3, 4, 5, 6, 8, 9, & 10). This generates a null 
+distribution that mimics far more closely the relative tree edge lengths. This
+is what we described the algorithm as doing in the paper. 
+
+# Conclusions
+Currently, the plan is to implement the "Proposed New Version" pending a few 
+discussions, unit testing, etc... 
+
